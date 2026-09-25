@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <string.h>
+#include <errno.h>
 
 int main(void)
 {
@@ -14,9 +16,14 @@ int main(void)
     {
         puts("FIFO de chat criada com sucesso");
     }
+    else if (errno == EEXIST)
+    {
+        puts("FIFO de chat ja existe, reutilizando");
+    }
     else
     {
         puts("Erro ao criar FIFO de chat");
+        perror("mkfifo");
         exit(1);
     }
 
