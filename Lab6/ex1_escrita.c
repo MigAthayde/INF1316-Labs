@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <string.h>
 
 #define FIFO "chatFifo"
 
@@ -25,7 +26,7 @@ int main(void)
     {
         printf("USR1> ");
         fgets(mensagem, sizeof(mensagem), stdin);
-        write(fifo, mensagem, sizeof(mensagem));
+        write(fifo, mensagem, strlen(mensagem) + 1);
 
         if(strcmp(mensagem, "sair\n") == 0)
         {

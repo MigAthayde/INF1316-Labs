@@ -1,0 +1,412 @@
+MIGUEL DE ATHAYDE CARNEIRO - 2211816
+
+QUESTAO 1) Abra duas secoes de terminais. Na primeira, execute um programa que fica em loop lendo de uma FIFO para depois escrever na saida padrao (tela). Na segunda, execute um programa que fica lendo da entrada padrao (teclado) e depois escreve na mesma FIFO.
+-----------------------------------------------------
+EX1_LEITURA.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+
+int main(void)
+{
+
+    int fifo;
+    char mensagem[100];
+
+    if( mkfifo("chatFifo", S_IRUSR | S_IWUSR) == 0)
+    {
+        puts("FIFO de chat criada com sucesso");
+    }
+    else if (errno == EEXIST)
+    {
+        puts("FIFO de chat ja existe, reutilizando");
+    }
+    else
+    {
+        puts("Erro ao criar FIFO de chat");
+        perror("mkfifo");
+        exit(1);
+    }
+
+    fifo = open("chatFifo", O_RDONLY);
+    if (fifo == -1)
+    {
+        puts("Erro ao abrir FIFO de chat");
+        perror("open");
+        exit(1);
+    }
+    else{
+        puts("Iniciando chat via FIFO...");
+    }
+
+    while(read(fifo, &mensagem, sizeof(mensagem)) > 0)
+    {
+        printf("USR2> ");
+        printf("%s", mensagem);
+    }
+    close(fifo);
+
+    return 0;
+}
+-----------------------------------------------------
+EX1_ESCRITA.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+
+#define FIFO "chatFifo"
+
+int main(void)
+{
+
+    int fifo;
+    char mensagem[100];
+    fifo = open(FIFO, O_WRONLY);
+    if (fifo == -1)
+    {
+        puts("Erro ao abrir FIFO de chat");
+        exit(1);
+    }
+    else{
+        puts("Iniciando chat via FIFO...");
+    }
+
+    while(1)
+    {
+        printf("USR1> ");
+        fgets(mensagem, sizeof(mensagem), stdin);
+        write(fifo, mensagem, strlen(mensagem) + 1);
+
+        if(strcmp(mensagem, "sair\n") == 0)
+        {
+            break;
+        }
+    }
+
+    close(fifo);
+
+    return 0;
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o ex1_leitura ex1_leitura.c
+$ gcc -o ex1_escrita ex1_escrita.c
+
+Terminal 1:
+$ ./ex1_leitura
+
+Terminal 2:
+$ ./ex1_escrita
+-----------------------------------------------------
+RESULTADO
+
+Terminal 1 (ex1_leitura):
+FIFO de chat criada com sucesso
+Iniciando chat via FIFO...
+USR2> ola tudo bem
+USR2> sair
+
+Terminal 2 (ex1_escrita):
+Iniciando chat via FIFO...
+USR1> ola tudo bem
+USR1> teste de fifo
+USR1> sair
+-----------------------------------------------------
+CONCLUSAO
+O ex1_leitura cria a FIFO "chatFifo" (ou reaproveita se ela ja existir, tratando o erro EEXIST) e abre em modo O_RDONLY. Por padrao essa chamada de open() fica bloqueada ate que outro processo abra a mesma FIFO para escrita, o que so acontece quando rodo o ex1_escrita no outro terminal (com O_WRONLY). Dai em diante o escritor le linha por linha do teclado com fgets e manda pela FIFO com write, enquanto o leitor fica preso num loop de read() esperando os dados chegarem para imprimir na tela.
+
+Um detalhe que reparei rodando o teste foi que a FIFO nao guarda "limites" entre mensagens: mandei "teste de fifo" e logo em seguida "sair", e o leitor recebeu os dois textos meio grudados no mesmo read(), entao o printf("%s", ...) so mostrou ate o primeiro '\0' do buffer e a mensagem do meio sumiu da tela. Isso deixa claro que a FIFO so trabalha com bytes crus, sem noçao de "mensagem" - se a aplicaçao precisa preservar cada mensagem separada, tem que implementar isso por conta propria (por exemplo com algum delimitador ou tamanho fixo).
+
+
+QUESTAO 2) Escreva um programa que primeiro cria uma FIFO e em seguida cria dois processos filho que escrevem uma string na FIFO. O pai da um waitpid em seguida le as strings desse FIFO e exibe na tela.
+-----------------------------------------------------
+EX2.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <errno.h>
+
+int main(void)
+{
+
+    int pid1, pid2;
+    int fifo;
+    char mensagem[21];
+    if (mkfifo("filhoFifo", S_IRUSR | S_IWUSR) == 0)
+    {
+        puts("FIFO de chat criada com sucesso");
+    }
+    else if (errno == EEXIST)
+    {
+        puts("FIFO de chat ja existe, reutilizando");
+    }
+    else
+    {
+        puts("Erro ao criar FIFO de chat");
+        perror("mkfifo");
+        exit(1);
+    }
+
+    fifo = open("filhoFifo", O_RDONLY | O_NONBLOCK);
+    if (fifo == -1)
+    {
+        puts("Erro ao abrir FIFO de chat");
+        perror("open");
+        exit(1);
+    }
+
+    pid1 = fork();
+    if (pid1 < 0)
+    {
+        puts("Erro ao criar processo filho 1");
+        exit(1);
+    }
+    else if (pid1 == 0)
+    {
+        int fifo_filho = open("filhoFifo", O_WRONLY);
+        write(fifo_filho, "Mensagem do filho 1", 20);
+        close(fifo_filho);
+        exit(0);
+    }
+
+    pid2 = fork();
+    if (pid2 < 0)
+    {
+        puts("Erro ao criar processo filho 2");
+        exit(1);
+    }
+    else if (pid2 == 0)
+    {
+        int fifo_filho = open("filhoFifo", O_WRONLY);
+        write(fifo_filho, "Mensagem do filho 2", 20);
+        close(fifo_filho);
+        exit(0);
+    }
+
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    read(fifo, mensagem, 20);
+    mensagem[20] = '\0';
+    printf("Mensagem recebida: %s\n", mensagem);
+
+    read(fifo, mensagem, 20);
+    mensagem[20] = '\0';
+    printf("Mensagem recebida: %s\n", mensagem);
+
+    close(fifo);
+
+    return 0;
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o ex2 ex2.c
+$ ./ex2
+-----------------------------------------------------
+RESULTADO
+FIFO de chat criada com sucesso
+FIFO de chat criada com sucesso
+FIFO de chat criada com sucesso
+Mensagem recebida: Mensagem do filho 1
+Mensagem recebida: Mensagem do filho 2
+-----------------------------------------------------
+CONCLUSAO
+Aqui o pai cria a FIFO "filhoFifo" e ja abre ela para leitura com O_NONBLOCK, pra nao travar esperando um escritor aparecer. Depois disso da dois fork()s: cada filho abre a FIFO so pra escrita, manda sua mensagem e morre. O pai espera os dois com waitpid() antes de ler, garantindo que as escritas ja aconteceram, e so entao le as duas mensagens da FIFO e mostra na tela.
+
+Uma coisa que nao esperava foi a mensagem "FIFO de chat criada com sucesso" aparecer 3 vezes na saida, em vez de 1. O motivo e que o puts() roda antes do fork(), e como a saida padrao fica em buffer (nao e um terminal interativo de verdade nesse teste), esse texto ainda nao tinha sido descarregado quando o processo pai se duplicou - entao cada filho herdou uma copia do buffer e acabou imprimindo ela de novo ao sair. Deu pra perceber na pratica que buffer de stdio pendente e algo que se propaga pro filho no fork(), e que da pra evitar isso dando um fflush antes de chamar fork() se quiser uma saida mais "limpa".
+
+
+QUESTAO 3) Escreva um servidor e um cliente usando duas FIFOs: uma para enviar strings para o servidor, e outra para transmitir as respostas de volta para os clientes. O servidor devera rodar em background e transformar cada palavra recebida de minusculas para maiusculas. Obs: execute os seus clientes em terminais diferentes.
+-----------------------------------------------------
+EX3_SERVIDOR.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <ctype.h>
+
+int main(void)
+{
+    int fifo_pedidos, fifo_respostas;
+    char mensagem[100];
+    int pid_cliente;
+    char texto[100];
+    int i;
+
+    if (mkfifo("pedidosFifo", S_IRUSR | S_IWUSR) == 0)
+    {
+        puts("FIFO de pedidos criada com sucesso");
+    }
+    else if (errno == EEXIST)
+    {
+        puts("FIFO de pedidos ja existe, reutilizando");
+    }
+    else
+    {
+        puts("Erro ao criar FIFO de pedidos");
+        perror("mkfifo");
+        exit(1);
+    }
+
+    if (mkfifo("serverFifo", S_IRUSR | S_IWUSR) == 0)
+    {
+        puts("FIFO de respostas criada com sucesso");
+    }
+    else if (errno == EEXIST)
+    {
+        puts("FIFO de respostas ja existe, reutilizando");
+    }
+    else
+    {
+        puts("Erro ao criar FIFO de respostas");
+        perror("mkfifo");
+        exit(1);
+    }
+
+    fifo_pedidos = open("pedidosFifo", O_RDWR);
+    if (fifo_pedidos == -1)
+    {
+        perror("open pedidosFifo");
+        exit(1);
+    }
+
+    fifo_respostas = open("serverFifo", O_RDWR);
+    if (fifo_respostas == -1)
+    {
+        perror("open serverFifo");
+        exit(1);
+    }
+
+    while (read(fifo_pedidos, mensagem, sizeof(mensagem)) > 0)
+    {
+        sscanf(mensagem, "%d|%[^\n]", &pid_cliente, texto);
+
+        for (i = 0; texto[i] != '\0'; i++)
+        {
+            texto[i] = toupper((unsigned char) texto[i]);
+        }
+
+        printf("Pedido de %d: %s -> %s\n", pid_cliente, mensagem, texto);
+
+        snprintf(mensagem, sizeof(mensagem), "%d|%s", pid_cliente, texto);
+        write(fifo_respostas, mensagem, strlen(mensagem) + 1);
+    }
+
+    close(fifo_pedidos);
+    close(fifo_respostas);
+
+    return 0;
+}
+-----------------------------------------------------
+EX3_CLIENTE.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <fcntl.h>
+
+int main(void)
+{
+    int fifo_pedidos, fifo_respostas;
+    char mensagem[100];
+    char texto[100];
+    char resposta[100];
+    int meu_pid;
+    int pid_resposta;
+    char texto_resposta[100];
+
+    meu_pid = getpid();
+
+    fifo_pedidos = open("pedidosFifo", O_WRONLY);
+    if (fifo_pedidos == -1)
+    {
+        perror("open pedidosFifo");
+        exit(1);
+    }
+
+    fifo_respostas = open("serverFifo", O_RDONLY);
+    if (fifo_respostas == -1)
+    {
+        perror("open serverFifo");
+        exit(1);
+    }
+
+    while (1)
+    {
+        printf("%d> ", meu_pid);
+        if (fgets(texto, sizeof(texto), stdin) == NULL)
+        {
+            break;
+        }
+        texto[strcspn(texto, "\n")] = '\0';
+
+        if (strcmp(texto, "sair") == 0)
+        {
+            break;
+        }
+
+        snprintf(mensagem, sizeof(mensagem), "%d|%s", meu_pid, texto);
+        write(fifo_pedidos, mensagem, strlen(mensagem) + 1);
+
+        do
+        {
+            if (read(fifo_respostas, resposta, sizeof(resposta)) <= 0)
+            {
+                break;
+            }
+            sscanf(resposta, "%d|%[^\n]", &pid_resposta, texto_resposta);
+        } while (pid_resposta != meu_pid);
+
+        printf("Resposta: %s\n", texto_resposta);
+    }
+
+    close(fifo_pedidos);
+    close(fifo_respostas);
+
+    return 0;
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o ex3_servidor ex3_servidor.c
+$ gcc -o ex3_cliente ex3_cliente.c
+
+Terminal 1 (servidor em background):
+$ ./ex3_servidor &
+
+Terminal 2 (cliente A):
+$ ./ex3_cliente
+-----------------------------------------------------
+RESULTADO
+
+Terminal 1 (ex3_servidor):
+FIFO de pedidos criada com sucesso
+FIFO de respostas criada com sucesso
+Pedido de 119873: 119873|ola mundo -> OLA MUNDO
+Pedido de 119873: 119873|fifo em c -> FIFO EM C
+
+Terminal 2 (ex3_cliente):
+119873> ola mundo
+Resposta: OLA MUNDO
+119873> fifo em c
+Resposta: FIFO EM C
+119873> sair
+-----------------------------------------------------
+CONCLUSAO
+Como a comunicacao aqui precisa ir nos dois sentidos, usei duas FIFOs: "pedidosFifo" pra mandar as strings pro servidor e "serverFifo" pra ele mandar as respostas de volta. Abri as duas com O_RDWR do lado do servidor pra ele nao ficar travado no open() esperando algum cliente conectar - assim ele consegue subir em background e so ficar esperando pedidos chegarem.
+
+O ponto mais interessante do exercicio foi resolver como identificar de quem e cada resposta, ja que a FIFO de resposta e a mesma pra todo mundo. A solucao que usei foi colar o PID do cliente na frente da mensagem, tipo "12345|texto", tanto no pedido quanto na resposta. Assim cada cliente, ao ler da FIFO de respostas, fica descartando (no loop do-while) qualquer resposta que nao seja com o seu proprio PID, ate achar a que e dele. Do lado do servidor, o processamento e simples: separa o PID do texto com sscanf, passa o texto por toupper() letra por letra, e manda de volta no mesmo formato. Funcionou bem no teste com um cliente so, mas rodando dois clientes ao mesmo tempo daria pra ver melhor esse filtro por PID em acao.
