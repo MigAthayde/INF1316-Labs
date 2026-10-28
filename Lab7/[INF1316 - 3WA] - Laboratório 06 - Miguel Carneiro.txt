@@ -1,0 +1,748 @@
+MIGUEL DE ATHAYDE CARNEIRO - 2211816
+
+QUESTAO 1) Execute o programa Corrida de Sapo algumas vezes e analise os resultados sobre a ordem de chegada dos sapos. Obs: compile com a opcao -lpthread
+-----------------------------------------------------
+CORRIDASAPOS.C
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define NUM_THREADS 5
+#define PULO_MAXIMO 100
+#define DESCANSO_MAXIMO 1
+#define DISTANCIA_PARA_CORRER 100
+
+static int classificacao = 1;
+static pthread_mutex_t lock;
+static char * resp[200]; 
+static int cont = 0;
+
+void *Correr(void *sapo);
+
+int main(void)
+{
+
+    classificacao =1;
+    pthread_t threads[NUM_THREADS];
+    int t;
+    printf("Corrida iniciada ... \n");
+    for(t=0;t < NUM_THREADS;t++)
+        pthread_create(&threads[t], NULL, Correr, (void *) t);
+    for(t=0;t < NUM_THREADS; t++)
+        pthread_join(threads[t],NULL);
+    printf("\n Acabou!!\n");
+    pthread_exit(NULL); 
+
+    return 0;
+}
+
+void *Correr(void *sapo)
+{
+    int pulos = 0;
+    int distanciaJaCorrida = 0;
+
+    while (distanciaJaCorrida <= DISTANCIA_PARA_CORRER) 
+    {
+        int pulo = rand() % PULO_MAXIMO;
+        distanciaJaCorrida += pulo;
+        pulos++;
+        printf("Sapo %d pulou\n", (int) sapo);
+        int descanso = rand() % DESCANSO_MAXIMO;
+        sleep(descanso);
+    }
+
+    printf("Sapo %d chegou na posicao %d com %d pulos\n", (int) sapo, classificacao, pulos);
+    cont++;
+    classificacao++;
+    pthread_exit(NULL); 
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o corridaSapos corridaSapos.c -lpthread
+$ ./corridaSapos
+$ ./corridaSapos
+$ ./corridaSapos
+-----------------------------------------------------
+RESULTADO
+Execucao 1:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 1 pulou
+Sapo 0 pulou
+Sapo 3 pulou
+Sapo 2 pulou
+Sapo 4 pulou
+Sapo 4 pulou
+Sapo 1 chegou na posicao 1 com 2 pulos
+Sapo 0 chegou na posicao 2 com 2 pulos
+Sapo 3 chegou na posicao 3 com 2 pulos
+Sapo 2 chegou na posicao 4 com 2 pulos
+Sapo 4 pulou
+Sapo 4 chegou na posicao 5 com 4 pulos
+
+ Acabou!!
+
+Execucao 2:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 0 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 0 chegou na posicao 1 com 2 pulos
+Sapo 3 chegou na posicao 2 com 2 pulos
+Sapo 4 pulou
+Sapo 1 chegou na posicao 3 com 2 pulos
+Sapo 2 chegou na posicao 4 com 2 pulos
+Sapo 4 chegou na posicao 5 com 2 pulos
+
+ Acabou!!
+
+Execucao 3:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 0 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 1 pulou
+Sapo 0 chegou na posicao 1 com 2 pulos
+Sapo 2 chegou na posicao 2 com 2 pulos
+Sapo 3 chegou na posicao 2 com 2 pulos
+Sapo 4 pulou
+Sapo 1 chegou na posicao 4 com 2 pulos
+Sapo 4 chegou na posicao 5 com 2 pulos
+
+ Acabou!!
+-----------------------------------------------------
+CONCLUSAO
+O programa cria 5 threads, uma para cada sapo, e todas executam a funcao Correr. Cada sapo da pulos de tamanho aleatorio ate passar da distancia de 100 e, ao chegar, imprime a sua posicao usando a variavel global classificacao, que logo depois e incrementada. Como DESCANSO_MAXIMO vale 1, rand() % 1 sempre da 0 e os sapos nunca dormem de verdade, entao a ordem dos pulos e de chegada depende so de como o escalonador alterna as threads. Por isso a ordem de chegada muda de uma execucao para outra e nao segue a ordem de criacao das threads.
+
+O problema aparece na execucao 3: os sapos 2 e 3 chegaram ambos na posicao 2 e ninguem ficou com a posicao 3. Isso acontece porque classificacao e cont sao variaveis compartilhadas entre as threads e sao lidas e alteradas sem nenhuma protecao. Um sapo le o valor de classificacao para imprimir, mas antes de fazer o classificacao++ outra thread e escalonada e le o mesmo valor. O incremento tambem nao e atomico (le, soma e escreve), entao um incremento pode se perder. Isso e uma condicao de corrida dentro de uma regiao critica. Em 30 execucoes o erro apareceu poucas vezes, o que mostra que ele depende do momento exato da troca de contexto e por isso e dificil de reproduzir.
+-----------------------------------------------------
+
+
+
+QUESTAO 2) Usando mutex, modifique o programa Corrida de Sapo para que o problema identificado anteriormente nao ocorra.
+-----------------------------------------------------
+CORRIDASAPOSMUTEX.C
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define NUM_THREADS 5
+#define PULO_MAXIMO 100
+#define DESCANSO_MAXIMO 3
+#define DISTANCIA_PARA_CORRER 100
+
+static int classificacao = 1;
+static pthread_mutex_t lock;
+static char * resp[200]; 
+static int cont = 0;
+
+void *Correr(void *sapo);
+
+int main(void)
+{
+
+    classificacao =1;
+    pthread_t threads[NUM_THREADS];
+    int t;
+    pthread_mutex_init(&lock, NULL);
+    printf("Corrida iniciada ... \n");
+    for(t=0;t < NUM_THREADS;t++)
+        pthread_create(&threads[t], NULL, Correr, (void *) t);
+    for(t=0;t < NUM_THREADS; t++)
+        pthread_join(threads[t],NULL);
+    printf("\n Acabou!!\n");
+    pthread_exit(NULL); 
+
+    pthread_mutex_destroy(&lock);pthread_mutex_destroy(&lock);
+    return 0;
+}
+
+void *Correr(void *sapo)
+{
+    int pulos = 0;
+    int distanciaJaCorrida = 0;
+
+    while (distanciaJaCorrida <= DISTANCIA_PARA_CORRER) 
+    {
+        int pulo = rand() % PULO_MAXIMO;
+        distanciaJaCorrida += pulo;
+        pulos++;
+        printf("Sapo %d pulou\n", (int) sapo);
+        int descanso = rand() % DESCANSO_MAXIMO;
+        sleep(descanso);
+    }
+
+    pthread_mutex_lock(&lock);
+    printf("Sapo %d chegou na posicao %d com %d pulos\n", (int) sapo, classificacao, pulos);
+    cont++;
+    classificacao++;
+    pthread_mutex_unlock(&lock);
+    pthread_exit(NULL); 
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o corridaSaposMutex corridaSaposMutex.c -lpthread
+$ ./corridaSaposMutex
+$ ./corridaSaposMutex
+$ ./corridaSaposMutex
+-----------------------------------------------------
+RESULTADO
+Execucao 1:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 3 pulou
+Sapo 0 pulou
+Sapo 2 pulou
+Sapo 1 pulou
+Sapo 4 pulou
+Sapo 2 chegou na posicao 1 com 2 pulos
+Sapo 3 chegou na posicao 2 com 2 pulos
+Sapo 1 chegou na posicao 3 com 2 pulos
+Sapo 4 chegou na posicao 4 com 2 pulos
+Sapo 0 chegou na posicao 5 com 2 pulos
+
+ Acabou!!
+
+Execucao 2:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 3 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 chegou na posicao 1 com 2 pulos
+Sapo 4 pulou
+Sapo 0 pulou
+Sapo 2 chegou na posicao 2 com 2 pulos
+Sapo 1 chegou na posicao 3 com 2 pulos
+Sapo 4 pulou
+Sapo 0 chegou na posicao 4 com 2 pulos
+Sapo 4 pulou
+Sapo 4 chegou na posicao 5 com 4 pulos
+
+ Acabou!!
+
+Execucao 3:
+Corrida iniciada ... 
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 3 pulou
+Sapo 4 pulou
+Sapo 3 pulou
+Sapo 0 pulou
+Sapo 1 pulou
+Sapo 2 pulou
+Sapo 4 pulou
+Sapo 2 chegou na posicao 1 com 2 pulos
+Sapo 3 chegou na posicao 2 com 2 pulos
+Sapo 0 chegou na posicao 3 com 2 pulos
+Sapo 4 chegou na posicao 4 com 2 pulos
+Sapo 1 chegou na posicao 5 com 2 pulos
+
+ Acabou!!
+-----------------------------------------------------
+CONCLUSAO
+A regiao critica do programa e o trecho em que o sapo imprime a sua classificacao e incrementa cont e classificacao. Esse trecho foi colocado entre pthread_mutex_lock(&lock) e pthread_mutex_unlock(&lock), e o mutex e inicializado com pthread_mutex_init no main antes de criar as threads. Assim, apenas uma thread por vez consegue ler e incrementar classificacao. Se outro sapo chegar enquanto um sapo esta dentro da regiao critica, ele fica bloqueado no lock ate o primeiro liberar o mutex, e so entao le o valor ja incrementado.
+
+Tambem mudei DESCANSO_MAXIMO para 3, para que os sapos realmente durmam entre os pulos e a corrida fique mais variada. Nas execucoes as posicoes de 1 a 5 aparecem sempre uma unica vez, sem repeticao e sem posicao faltando. A ordem de chegada continua variando entre as execucoes, o que e esperado, ja que depende dos pulos e do escalonamento. O que o mutex garante e que a classificacao atribuida a cada sapo e consistente.
+-----------------------------------------------------
+
+
+
+QUESTAO 3) Usando threads, escreva um programa C que implemente o problema do produtor/consumidor. O produtor deve produzir dados (numeros inteiros pseudo-aleatorios) a cada 1 segundo colocando-os em uma fila (buffer, implementacao circular). O consumidor deve retirar dados da fila a cada 2 segundos. O tamanho maximo da fila deve ser de 8 elementos (MAXFILA) e tanto o produtor como o consumidor devem produzir/consumir 64 elementos (numeros inteiros de 1 a 64, por exemplo) evitando condicoes de corrida. Variaveis compartilhadas entre threads sao simplesmente variaveis globais.
+-----------------------------------------------------
+PRODUTORCONSUMIDOR.C
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define MAXFILA 8
+#define TOTAL 64
+
+static int buffer[MAXFILA];
+static int inicio = 0;
+static int fim = 0;
+static int qtd = 0;
+
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t naoCheio = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t naoVazio = PTHREAD_COND_INITIALIZER;
+
+void *Produtor(void *arg);
+void *Consumidor(void *arg);
+
+int main(void)
+{
+    pthread_t produtor, consumidor;
+
+    printf("Inicio\n");
+    pthread_create(&produtor, NULL, Produtor, NULL);
+    pthread_create(&consumidor, NULL, Consumidor, NULL);
+    pthread_join(produtor, NULL);
+    pthread_join(consumidor, NULL);
+    printf("\nFim!!\n");
+
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&naoCheio);
+    pthread_cond_destroy(&naoVazio);
+    return 0;
+}
+
+void *Produtor(void *arg)
+{
+    for (int i = 1; i <= TOTAL; i++)
+    {
+        sleep(1);
+        int valor = rand() % 100;
+
+        pthread_mutex_lock(&mutex);
+        while (qtd == MAXFILA)
+            pthread_cond_wait(&naoCheio, &mutex);
+
+        buffer[fim] = valor;
+        fim = (fim + 1) % MAXFILA;
+        qtd++;
+        printf("Produtor:   %2do valor = %2d | fila com %d\n", i, valor, qtd);
+
+        pthread_cond_signal(&naoVazio);
+        pthread_mutex_unlock(&mutex);
+    }
+    pthread_exit(NULL);
+}
+
+void *Consumidor(void *arg)
+{
+    for (int i = 1; i <= TOTAL; i++)
+    {
+        sleep(2);
+
+        pthread_mutex_lock(&mutex);
+        while (qtd == 0)
+            pthread_cond_wait(&naoVazio, &mutex);
+
+        int valor = buffer[inicio];
+        inicio = (inicio + 1) % MAXFILA;
+        qtd--;
+        printf("Consumidor: %2do valor = %2d | fila com %d\n", i, valor, qtd);
+
+        pthread_cond_signal(&naoCheio);
+        pthread_mutex_unlock(&mutex);
+    }
+    pthread_exit(NULL);
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o produtorConsumidor produtorConsumidor.c -lpthread
+$ ./produtorConsumidor
+-----------------------------------------------------
+RESULTADO
+Inicio
+Produtor:    1o valor = 83 | fila com 1
+Consumidor:  1o valor = 83 | fila com 0
+Produtor:    2o valor = 86 | fila com 1
+Produtor:    3o valor = 77 | fila com 2
+Consumidor:  2o valor = 86 | fila com 1
+Produtor:    4o valor = 15 | fila com 2
+Produtor:    5o valor = 93 | fila com 3
+Consumidor:  3o valor = 77 | fila com 2
+Produtor:    6o valor = 35 | fila com 3
+Produtor:    7o valor = 86 | fila com 4
+Consumidor:  4o valor = 15 | fila com 3
+Produtor:    8o valor = 92 | fila com 4
+Produtor:    9o valor = 49 | fila com 5
+Consumidor:  5o valor = 93 | fila com 4
+Produtor:   10o valor = 21 | fila com 5
+Produtor:   11o valor = 62 | fila com 6
+Consumidor:  6o valor = 35 | fila com 5
+Produtor:   12o valor = 27 | fila com 6
+Produtor:   13o valor = 90 | fila com 7
+Consumidor:  7o valor = 86 | fila com 6
+Produtor:   14o valor = 59 | fila com 7
+Produtor:   15o valor = 63 | fila com 8
+Consumidor:  8o valor = 92 | fila com 7
+Produtor:   16o valor = 26 | fila com 8
+Consumidor:  9o valor = 49 | fila com 7
+Produtor:   17o valor = 40 | fila com 8
+Consumidor: 10o valor = 21 | fila com 7
+Produtor:   18o valor = 26 | fila com 8
+Consumidor: 11o valor = 62 | fila com 7
+Produtor:   19o valor = 72 | fila com 8
+Consumidor: 12o valor = 27 | fila com 7
+Produtor:   20o valor = 36 | fila com 8
+Consumidor: 13o valor = 90 | fila com 7
+Produtor:   21o valor = 11 | fila com 8
+Consumidor: 14o valor = 59 | fila com 7
+Produtor:   22o valor = 68 | fila com 8
+Consumidor: 15o valor = 63 | fila com 7
+Produtor:   23o valor = 67 | fila com 8
+Consumidor: 16o valor = 26 | fila com 7
+Produtor:   24o valor = 29 | fila com 8
+Consumidor: 17o valor = 40 | fila com 7
+Produtor:   25o valor = 82 | fila com 8
+Consumidor: 18o valor = 26 | fila com 7
+Produtor:   26o valor = 30 | fila com 8
+Consumidor: 19o valor = 72 | fila com 7
+Produtor:   27o valor = 62 | fila com 8
+Consumidor: 20o valor = 36 | fila com 7
+Produtor:   28o valor = 23 | fila com 8
+Consumidor: 21o valor = 11 | fila com 7
+Produtor:   29o valor = 67 | fila com 8
+Consumidor: 22o valor = 68 | fila com 7
+Produtor:   30o valor = 35 | fila com 8
+Consumidor: 23o valor = 67 | fila com 7
+Produtor:   31o valor = 29 | fila com 8
+Consumidor: 24o valor = 29 | fila com 7
+Produtor:   32o valor =  2 | fila com 8
+Consumidor: 25o valor = 82 | fila com 7
+Produtor:   33o valor = 22 | fila com 8
+Consumidor: 26o valor = 30 | fila com 7
+Produtor:   34o valor = 58 | fila com 8
+Consumidor: 27o valor = 62 | fila com 7
+Produtor:   35o valor = 69 | fila com 8
+Consumidor: 28o valor = 23 | fila com 7
+Produtor:   36o valor = 67 | fila com 8
+Consumidor: 29o valor = 67 | fila com 7
+Produtor:   37o valor = 93 | fila com 8
+Consumidor: 30o valor = 35 | fila com 7
+Produtor:   38o valor = 56 | fila com 8
+Consumidor: 31o valor = 29 | fila com 7
+Produtor:   39o valor = 11 | fila com 8
+Consumidor: 32o valor =  2 | fila com 7
+Produtor:   40o valor = 42 | fila com 8
+Consumidor: 33o valor = 22 | fila com 7
+Produtor:   41o valor = 29 | fila com 8
+Consumidor: 34o valor = 58 | fila com 7
+Produtor:   42o valor = 73 | fila com 8
+Consumidor: 35o valor = 69 | fila com 7
+Produtor:   43o valor = 21 | fila com 8
+Consumidor: 36o valor = 67 | fila com 7
+Produtor:   44o valor = 19 | fila com 8
+Consumidor: 37o valor = 93 | fila com 7
+Produtor:   45o valor = 84 | fila com 8
+Consumidor: 38o valor = 56 | fila com 7
+Produtor:   46o valor = 37 | fila com 8
+Consumidor: 39o valor = 11 | fila com 7
+Produtor:   47o valor = 98 | fila com 8
+Consumidor: 40o valor = 42 | fila com 7
+Produtor:   48o valor = 24 | fila com 8
+Consumidor: 41o valor = 29 | fila com 7
+Produtor:   49o valor = 15 | fila com 8
+Consumidor: 42o valor = 73 | fila com 7
+Produtor:   50o valor = 70 | fila com 8
+Consumidor: 43o valor = 21 | fila com 7
+Produtor:   51o valor = 13 | fila com 8
+Consumidor: 44o valor = 19 | fila com 7
+Produtor:   52o valor = 26 | fila com 8
+Consumidor: 45o valor = 84 | fila com 7
+Produtor:   53o valor = 91 | fila com 8
+Consumidor: 46o valor = 37 | fila com 7
+Produtor:   54o valor = 80 | fila com 8
+Consumidor: 47o valor = 98 | fila com 7
+Produtor:   55o valor = 56 | fila com 8
+Consumidor: 48o valor = 24 | fila com 7
+Produtor:   56o valor = 73 | fila com 8
+Consumidor: 49o valor = 15 | fila com 7
+Produtor:   57o valor = 62 | fila com 8
+Consumidor: 50o valor = 70 | fila com 7
+Produtor:   58o valor = 70 | fila com 8
+Consumidor: 51o valor = 13 | fila com 7
+Produtor:   59o valor = 96 | fila com 8
+Consumidor: 52o valor = 26 | fila com 7
+Produtor:   60o valor = 81 | fila com 8
+Consumidor: 53o valor = 91 | fila com 7
+Produtor:   61o valor =  5 | fila com 8
+Consumidor: 54o valor = 80 | fila com 7
+Produtor:   62o valor = 25 | fila com 8
+Consumidor: 55o valor = 56 | fila com 7
+Produtor:   63o valor = 84 | fila com 8
+Consumidor: 56o valor = 73 | fila com 7
+Produtor:   64o valor = 27 | fila com 8
+Consumidor: 57o valor = 62 | fila com 7
+Consumidor: 58o valor = 70 | fila com 6
+Consumidor: 59o valor = 96 | fila com 5
+Consumidor: 60o valor = 81 | fila com 4
+Consumidor: 61o valor =  5 | fila com 3
+Consumidor: 62o valor = 25 | fila com 2
+Consumidor: 63o valor = 84 | fila com 1
+Consumidor: 64o valor = 27 | fila com 0
+
+Fim!!
+-----------------------------------------------------
+CONCLUSAO
+O buffer e um vetor global de MAXFILA = 8 posicoes usado como fila circular. A variavel fim indica onde o produtor insere, inicio indica de onde o consumidor retira, e qtd guarda quantos elementos estao na fila. Os indices andam com (indice + 1) % MAXFILA, entao ao chegar no fim do vetor eles voltam para a posicao 0. O produtor gera um numero aleatorio a cada 1 segundo e o consumidor retira um a cada 2 segundos, cada um 64 vezes.
+
+Como buffer, inicio, fim e qtd sao compartilhados, todo acesso a eles e feito com o mutex travado, evitando condicoes de corrida. Alem disso foram usadas duas variaveis de condicao: naoCheio e naoVazio. Se a fila esta cheia, o produtor chama pthread_cond_wait(&naoCheio, &mutex), que libera o mutex e bloqueia a thread ate o consumidor retirar um elemento e sinalizar naoCheio. Do mesmo jeito, se a fila esta vazia, o consumidor espera em naoVazio ate o produtor inserir algo. O wait fica dentro de um while para que a condicao seja testada de novo quando a thread acordar.
+
+No resultado da para ver o comportamento esperado: no inicio o produtor e mais rapido e a fila vai enchendo ate chegar em 8. A partir dai o produtor fica bloqueado e so consegue inserir quando o consumidor retira um elemento, por isso as linhas passam a alternar com a fila oscilando entre 7 e 8. Depois que o produtor termina os 64 elementos, o consumidor esvazia a fila ate 0. Os valores sao consumidos exatamente na mesma ordem em que foram produzidos, sem perda nem repeticao.
+-----------------------------------------------------
+
+
+
+QUESTAO 4) Modifique o programa anterior, para que haja 2 (ou mais) threads consumidor e 2 (ou mais) threads produtor. O que muda em relacao ao uso do mutex e da variavel de condicao?
+-----------------------------------------------------
+PRODUTORCONSUMIDORMULTI.C
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define MAXFILA 8
+#define TOTAL 64
+#define NUM_PRODUTORES 2
+#define NUM_CONSUMIDORES 2
+
+static int buffer[MAXFILA];
+static int inicio = 0;
+static int fim = 0;
+static int qtd = 0;
+
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t naoCheio = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t naoVazio = PTHREAD_COND_INITIALIZER;
+
+void *Produtor(void *arg);
+void *Consumidor(void *arg);
+
+int main(void)
+{
+    pthread_t produtores[NUM_PRODUTORES];
+    pthread_t consumidores[NUM_CONSUMIDORES];
+    int t;
+
+    printf("Inicio\n");
+    for (t = 0; t < NUM_PRODUTORES; t++)
+        pthread_create(&produtores[t], NULL, Produtor, (void *)(intptr_t) t);
+    for (t = 0; t < NUM_CONSUMIDORES; t++)
+        pthread_create(&consumidores[t], NULL, Consumidor, (void *)(intptr_t) t);
+
+    for (t = 0; t < NUM_PRODUTORES; t++)
+        pthread_join(produtores[t], NULL);
+    for (t = 0; t < NUM_CONSUMIDORES; t++)
+        pthread_join(consumidores[t], NULL);
+    printf("\nFim!!\n");
+
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&naoCheio);
+    pthread_cond_destroy(&naoVazio);
+    return 0;
+}
+
+void *Produtor(void *arg)
+{
+    int id = (int)(intptr_t) arg;
+
+    for (int i = 1; i <= TOTAL / NUM_PRODUTORES; i++)
+    {
+        sleep(1);
+        int valor = rand() % 100;
+
+        pthread_mutex_lock(&mutex);
+
+        while (qtd == MAXFILA)
+            pthread_cond_wait(&naoCheio, &mutex);
+
+        buffer[fim] = valor;
+        fim = (fim + 1) % MAXFILA;
+        qtd++;
+        printf("Produtor %d:   valor = %2d | fila com %d\n", id, valor, qtd);
+
+        pthread_cond_signal(&naoVazio);
+        pthread_mutex_unlock(&mutex);
+    }
+    pthread_exit(NULL);
+}
+
+void *Consumidor(void *arg)
+{
+    int id = (int)(intptr_t) arg;
+
+    for (int i = 1; i <= TOTAL / NUM_CONSUMIDORES; i++)
+    {
+        sleep(2);
+
+        pthread_mutex_lock(&mutex);
+        while (qtd == 0)
+            pthread_cond_wait(&naoVazio, &mutex);
+
+        int valor = buffer[inicio];
+        inicio = (inicio + 1) % MAXFILA;
+        qtd--;
+        printf("Consumidor %d: valor = %2d | fila com %d\n", id, valor, qtd);
+
+        pthread_cond_signal(&naoCheio);
+        pthread_mutex_unlock(&mutex);
+    }
+    pthread_exit(NULL);
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o produtorConsumidorMulti produtorConsumidorMulti.c -lpthread
+$ ./produtorConsumidorMulti
+-----------------------------------------------------
+RESULTADO
+Inicio
+Produtor 0:   valor = 83 | fila com 1
+Produtor 1:   valor = 86 | fila com 2
+Consumidor 0: valor = 83 | fila com 1
+Consumidor 1: valor = 86 | fila com 0
+Produtor 0:   valor = 77 | fila com 1
+Produtor 1:   valor = 15 | fila com 2
+Produtor 0:   valor = 93 | fila com 3
+Produtor 1:   valor = 35 | fila com 4
+Consumidor 0: valor = 77 | fila com 3
+Consumidor 1: valor = 15 | fila com 2
+Produtor 0:   valor = 86 | fila com 3
+Produtor 1:   valor = 92 | fila com 4
+Produtor 0:   valor = 49 | fila com 5
+Produtor 1:   valor = 21 | fila com 6
+Produtor 0:   valor = 62 | fila com 7
+Consumidor 0: valor = 93 | fila com 6
+Consumidor 1: valor = 35 | fila com 5
+Produtor 1:   valor = 27 | fila com 6
+Produtor 0:   valor = 90 | fila com 7
+Produtor 1:   valor = 59 | fila com 8
+Consumidor 0: valor = 86 | fila com 7
+Consumidor 1: valor = 92 | fila com 6
+Produtor 0:   valor = 63 | fila com 7
+Produtor 1:   valor = 26 | fila com 8
+Consumidor 0: valor = 49 | fila com 7
+Consumidor 1: valor = 21 | fila com 6
+Produtor 0:   valor = 40 | fila com 7
+Produtor 1:   valor = 26 | fila com 8
+Consumidor 1: valor = 62 | fila com 7
+Consumidor 0: valor = 27 | fila com 6
+Produtor 0:   valor = 72 | fila com 7
+Produtor 1:   valor = 36 | fila com 8
+Consumidor 1: valor = 90 | fila com 7
+Produtor 0:   valor = 11 | fila com 8
+Consumidor 0: valor = 59 | fila com 7
+Produtor 1:   valor = 68 | fila com 8
+Consumidor 1: valor = 63 | fila com 7
+Consumidor 0: valor = 26 | fila com 6
+Produtor 0:   valor = 67 | fila com 7
+Produtor 1:   valor = 29 | fila com 8
+Consumidor 1: valor = 40 | fila com 7
+Consumidor 0: valor = 26 | fila com 6
+Produtor 0:   valor = 82 | fila com 7
+Produtor 1:   valor = 30 | fila com 8
+Consumidor 1: valor = 72 | fila com 7
+Produtor 0:   valor = 62 | fila com 8
+Consumidor 0: valor = 36 | fila com 7
+Produtor 1:   valor = 23 | fila com 8
+Consumidor 0: valor = 11 | fila com 7
+Consumidor 1: valor = 68 | fila com 6
+Produtor 0:   valor = 67 | fila com 7
+Produtor 1:   valor = 35 | fila com 8
+Consumidor 0: valor = 67 | fila com 7
+Consumidor 1: valor = 29 | fila com 6
+Produtor 0:   valor = 29 | fila com 7
+Produtor 1:   valor =  2 | fila com 8
+Consumidor 0: valor = 82 | fila com 7
+Consumidor 1: valor = 30 | fila com 6
+Produtor 0:   valor = 58 | fila com 7
+Produtor 1:   valor = 22 | fila com 8
+Consumidor 1: valor = 62 | fila com 7
+Produtor 0:   valor = 69 | fila com 8
+Consumidor 0: valor = 23 | fila com 7
+Produtor 1:   valor = 67 | fila com 8
+Consumidor 1: valor = 67 | fila com 7
+Consumidor 0: valor = 35 | fila com 6
+Produtor 0:   valor = 93 | fila com 7
+Produtor 1:   valor = 56 | fila com 8
+Consumidor 0: valor = 29 | fila com 7
+Consumidor 1: valor =  2 | fila com 6
+Produtor 1:   valor = 11 | fila com 7
+Produtor 0:   valor = 42 | fila com 8
+Consumidor 0: valor = 58 | fila com 7
+Consumidor 1: valor = 22 | fila com 6
+Produtor 0:   valor = 29 | fila com 7
+Produtor 1:   valor = 73 | fila com 8
+Consumidor 0: valor = 69 | fila com 7
+Consumidor 1: valor = 67 | fila com 6
+Produtor 0:   valor = 21 | fila com 7
+Produtor 1:   valor = 19 | fila com 8
+Consumidor 0: valor = 93 | fila com 7
+Produtor 1:   valor = 84 | fila com 8
+Consumidor 1: valor = 56 | fila com 7
+Produtor 0:   valor = 37 | fila com 8
+Consumidor 1: valor = 11 | fila com 7
+Consumidor 0: valor = 42 | fila com 6
+Produtor 1:   valor = 98 | fila com 7
+Produtor 0:   valor = 24 | fila com 8
+Consumidor 0: valor = 29 | fila com 7
+Produtor 0:   valor = 15 | fila com 8
+Consumidor 1: valor = 73 | fila com 7
+Produtor 1:   valor = 70 | fila com 8
+Consumidor 0: valor = 21 | fila com 7
+Produtor 0:   valor = 13 | fila com 8
+Consumidor 1: valor = 19 | fila com 7
+Produtor 1:   valor = 26 | fila com 8
+Consumidor 1: valor = 84 | fila com 7
+Consumidor 0: valor = 37 | fila com 6
+Produtor 0:   valor = 91 | fila com 7
+Produtor 1:   valor = 80 | fila com 8
+Consumidor 1: valor = 98 | fila com 7
+Consumidor 0: valor = 24 | fila com 6
+Produtor 0:   valor = 56 | fila com 7
+Produtor 1:   valor = 73 | fila com 8
+Consumidor 1: valor = 15 | fila com 7
+Consumidor 0: valor = 70 | fila com 6
+Produtor 0:   valor = 62 | fila com 7
+Produtor 1:   valor = 70 | fila com 8
+Consumidor 0: valor = 13 | fila com 7
+Consumidor 1: valor = 26 | fila com 6
+Produtor 0:   valor = 96 | fila com 7
+Produtor 1:   valor = 81 | fila com 8
+Consumidor 1: valor = 91 | fila com 7
+Consumidor 0: valor = 80 | fila com 6
+Produtor 0:   valor =  5 | fila com 7
+Produtor 1:   valor = 25 | fila com 8
+Consumidor 1: valor = 56 | fila com 7
+Consumidor 0: valor = 73 | fila com 6
+Produtor 0:   valor = 84 | fila com 7
+Produtor 1:   valor = 27 | fila com 8
+Consumidor 0: valor = 62 | fila com 7
+Consumidor 1: valor = 70 | fila com 6
+Consumidor 1: valor = 96 | fila com 5
+Consumidor 0: valor = 81 | fila com 4
+Consumidor 1: valor =  5 | fila com 3
+Consumidor 0: valor = 25 | fila com 2
+Consumidor 0: valor = 84 | fila com 1
+Consumidor 1: valor = 27 | fila com 0
+
+Fim!!
+-----------------------------------------------------
+CONCLUSAO
+Foram criadas 2 threads produtoras e 2 consumidoras, cada uma recebendo um id como argumento. Para manter o total de 64 elementos, cada produtor produz TOTAL / NUM_PRODUTORES = 32 valores e cada consumidor consome TOTAL / NUM_CONSUMIDORES = 32 valores. O buffer circular, o mutex e as duas variaveis de condicao continuam os mesmos da questao anterior.
+
+Em relacao ao mutex, a diferenca e que agora ele tambem protege threads do mesmo tipo umas das outras. Com um produtor e um consumidor, cada indice (fim e inicio) era alterado por uma unica thread. Agora dois produtores podem tentar escrever em buffer[fim] e avancar fim ao mesmo tempo, e dois consumidores podem ler o mesmo buffer[inicio]. Sem o mutex, dois produtores poderiam gravar na mesma posicao, perdendo um valor, ou dois consumidores poderiam retirar o mesmo elemento.
+
+Em relacao a variavel de condicao, passa a ser obrigatorio testar a condicao em um while e nao em um if. Quando um produtor sinaliza naoVazio, um consumidor acorda, mas antes de ele conseguir pegar o mutex de volta o outro consumidor pode ter retirado o elemento, e a fila volta a ficar vazia. Com o while, a thread que acorda testa de novo e volta a esperar se for o caso. O mesmo vale para os produtores com a fila cheia. Tambem pode ser usado pthread_cond_broadcast no lugar de pthread_cond_signal para acordar todas as threads que estao esperando, mas como cada insercao libera so um elemento e cada retirada libera so uma vaga, o signal junto com o while ja e suficiente. No resultado os valores continuam saindo na mesma ordem em que entraram na fila, a fila nunca passa de 8 nem fica negativa e os 64 elementos sao consumidos sem repeticao.
+-----------------------------------------------------

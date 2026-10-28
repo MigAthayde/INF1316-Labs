@@ -1,5 +1,7 @@
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #define NUM_THREADS 5
 #define PULO_MAXIMO 100
@@ -44,7 +46,8 @@ void *Correr(void *sapo)
         int descanso = rand() % DESCANSO_MAXIMO;
         sleep(descanso);
     }
-    printf("Sapo %d chegou na posicaoo %d com %d pulos\n", (int) sapo, classificacao, pulos);
+
+    printf("Sapo %d chegou na posicao %d com %d pulos\n", (int) sapo, classificacao, pulos);
     cont++;
     classificacao++;
     pthread_exit(NULL); 
