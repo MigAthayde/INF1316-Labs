@@ -9,10 +9,9 @@ void resetmemorypool(void);
 
 int main(void)
 {
-    initmemorypool();
-
     printf("---  Limite inicial do heap %p -----\n", sbrk(0));
-
+    initmemorypool();
+    
     int* v1 = (int*) myallocate(sizeof(int)*4);
     if (v1 == NULL)
     {
