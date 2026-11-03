@@ -1,0 +1,631 @@
+MIGUEL DE ATHAYDE CARNEIRO - 2211816
+
+QUESTAO 1) Faca um programa que usa myallocate para alocar e desalocar memoria dinamicamente.
+-----------------------------------------------------
+MYALLOCATE.C
+#include<stdio.h>
+#include<unistd.h>
+
+void *memorypool;
+
+void *myallocate(int n);
+void initmemorypool(void);
+void resetmemorypool(void);
+
+int main(void)
+{
+    printf("---  Limite inicial do heap %p -----\n", sbrk(0));
+    initmemorypool();
+
+    int* v1 = (int*) myallocate(sizeof(int)*4);
+    if (v1 == NULL)
+    {
+        printf("Erro na alocacao de momeria pro v1");
+        return 1;
+    }
+
+    printf("--- Novo limite para o heap %p -----\n", sbrk(0));
+    resetmemorypool();
+    return 0;
+}
+
+void *myallocate( int n){
+    void* ptr = sbrk(n);
+    if(ptr == (void*)-1)
+    {
+        return NULL;
+    }
+    return ptr;
+}
+void initmemorypool(void)
+{
+    memorypool = sbrk(0);
+}
+void resetmemorypool(void)
+{
+    brk(memorypool);
+}
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o myallocate myallocate.c
+$ ./myallocate
+$ ./myallocate
+-----------------------------------------------------
+RESULTADO
+Execucao 1:
+---  Limite inicial do heap 0x55e9f84ef000 -----
+--- Novo limite para o heap 0x55e9f8511010 -----
+
+Execucao 2:
+---  Limite inicial do heap 0x55bfb70dc000 -----
+--- Novo limite para o heap 0x55bfb70fe010 -----
+-----------------------------------------------------
+CONCLUSAO
+O programa usa as funcoes do myallocate.c para gerenciar o heap diretamente com sbrk() e brk(), sem passar pelo malloc(). A funcao initmemorypool() guarda em memorypool o limite atual do heap (sbrk(0)). Depois, myallocate(n) chama sbrk(n), que empurra o limite do heap n bytes para frente e retorna o endereco antigo, que passa a ser o inicio da area alocada (aqui 16 bytes, um vetor de 4 inteiros). Se o sbrk falhar ele retorna (void*)-1, e nesse caso myallocate retorna NULL. Por fim, resetmemorypool() chama brk(memorypool), que move o limite do heap de volta para onde estava, desalocando de uma vez tudo o que foi alocado depois do init. Por isso essa forma de alocacao funciona como uma pilha: nao da para liberar uma alocacao especifica, so voltar o limite para um ponto anterior.
+
+Um detalhe interessante aparece na saida: a diferenca entre os dois enderecos impressos e de 0x22010 bytes (cerca de 136 KB), e nao apenas os 16 bytes que foram alocados. Isso acontece porque o sbrk(0) do primeiro printf e avaliado antes do printf executar, e o proprio printf, na primeira vez que e chamado, usa malloc() para criar o buffer da saida padrao. O malloc chama brk() internamente e aumenta o heap em um bloco grande. So depois disso o initmemorypool() pega o limite do heap, e entao o myallocate soma os 16 bytes (o final ...010 do endereco). Isso mostra na pratica o aviso do laboratorio de que alocar com sbrk/brk pode conflitar com chamadas que usam malloc(), ja que os dois mexem no mesmo limite do heap.
+-----------------------------------------------------
+
+
+
+QUESTAO 2) Execute map-exemplo.c passando o nome de um arquivo como parametro. Qual foi a novidade?
+-----------------------------------------------------
+MAP-EXEMPLO.C
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+
+int main (int argc, char *argv[])
+{
+    struct stat sb;
+    off_t len;
+    char *p;
+    int fd;
+
+    if (argc < 2) {
+        fprintf (stderr, "usage: %s <file>\n", argv[0]);
+        exit(1);
+    }
+
+    fd = open (argv[1], O_RDONLY);
+    if (fd == -1) {
+        perror ("open");
+        exit(1);
+    }
+    if (fstat(fd, &sb)== -1) {
+        perror ("fstat");
+        exit(1);
+    }
+
+    if (!S_ISREG (sb.st_mode)) {
+        fprintf (stderr, "%s is not a file\n", argv[1]);
+        exit(1);
+    }
+    p = mmap (0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror ("mmap"); exit(1);
+    }
+    if (close (fd) == -1) {
+        perror ("close"); exit(1);
+    }
+    for (len = 0; len < sb.st_size; len++)
+        putchar (p[len]);
+    if (munmap (p, sb.st_size) == -1) {
+        perror ("munmap");
+        exit(1);
+    }
+    return 0;
+}
+-----------------------------------------------------
+TESTE.TXT
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o map-exemplo map-exemplo.c
+$ ./map-exemplo teste.txt
+-----------------------------------------------------
+RESULTADO
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+-----------------------------------------------------
+CONCLUSAO
+A novidade e que o conteudo do arquivo foi impresso sem nenhuma chamada a read(). O programa abre o arquivo, usa fstat() para descobrir o seu tamanho (st_size) e confirmar que e um arquivo regular, e depois chama mmap(), que mapeia o arquivo para dentro do espaco de enderecamento do processo e retorna um ponteiro p para o inicio dessa regiao. A partir dai o arquivo e acessado como se fosse um vetor de caracteres na memoria: p[0] e o primeiro byte do arquivo, p[1] o segundo e assim por diante, que e a correspondencia 1-a-1 entre enderecos de memoria e o conteudo do arquivo vista no laboratorio.
+
+Outra coisa que chama atencao e que o close(fd) e feito antes do laco que imprime o arquivo e mesmo assim a leitura funciona. Isso acontece porque, depois de criado, o mapeamento nao depende mais do descritor aberto, ele continua valido ate o munmap(). Quem carrega os dados do disco para a memoria e o proprio kernel, por demanda, quando uma pagina mapeada e acessada pela primeira vez.
+-----------------------------------------------------
+
+
+
+QUESTAO 3) Modifique map-exemplo.c para: a. Verificar quantas paginas de memoria o seu arquivo precisou. b. Medir o quao mais rapido foi a escrita do arquivo mapeado quando comparado com a E/S em disco. Dica: use gettimeofday()
+-----------------------------------------------------
+NOVOMAP-EXEMPLO.C
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+#include<sys/time.h>
+
+int main (int argc, char *argv[])
+{
+    struct stat sb;
+    off_t len;
+    char *p;
+    int fd;
+    struct timeval inicio, fim;
+    long tempo_mmap, tempo_disco;
+
+    if (argc < 2) {
+        fprintf (stderr, "usage: %s <file>\n", argv[0]);
+        exit(1);
+    }
+
+    fd = open (argv[1], O_RDONLY);
+    if (fd == -1) {
+        perror ("open");
+        exit(1);
+    }
+    if (fstat(fd, &sb)== -1) {
+        perror ("fstat");
+        exit(1);
+    }
+
+    if (!S_ISREG (sb.st_mode)) {
+        fprintf (stderr, "%s is not a file\n", argv[1]);
+        exit(1);
+    }
+    p = mmap (0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror ("mmap"); exit(1);
+    }
+
+    gettimeofday(&inicio, NULL);
+    for (len = 0; len < sb.st_size; len++)
+        putchar (p[len]);
+    gettimeofday(&fim, NULL);
+    tempo_mmap = (fim.tv_sec - inicio.tv_sec) * 1000000L + (fim.tv_usec - inicio.tv_usec);
+
+    long pagesize = sysconf(_SC_PAGESIZE);
+    long pages = (sb.st_size + pagesize -1) / pagesize;
+
+    lseek(fd, 0, SEEK_SET); // garante que o cursor está no início do arquivo
+    char c;
+    gettimeofday(&inicio, NULL);
+    for (len = 0; len < sb.st_size; len++) {
+        read(fd, &c, 1);
+        putchar(c);
+    }
+    gettimeofday(&fim, NULL);
+    if (close (fd) == -1) {
+        perror ("close"); exit(1);
+    }
+    tempo_disco = (fim.tv_sec - inicio.tv_sec) * 1000000L + (fim.tv_usec - inicio.tv_usec);
+    printf("\nTempo com mmap:  %ld us\n", tempo_mmap);
+    printf("Tempo com disco: %ld us\n", tempo_disco);
+
+    printf("Tamanho do arquivo: %ld bytes\n", (long)sb.st_size);
+    printf("Tamanho da pagina:  %ld bytes\n", pagesize);
+    printf("Paginas utilizadas: %ld\n", pages);
+
+    if (munmap (p, sb.st_size) == -1) {
+        perror ("munmap");
+        exit(1);
+    }
+    return 0;
+}
+-----------------------------------------------------
+TESTE.TXT
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o novomap-exemplo novomap-exemplo.c
+$ ./novomap-exemplo teste.txt
+$ ./novomap-exemplo teste.txt
+$ ./novomap-exemplo teste.txt
+-----------------------------------------------------
+RESULTADO
+Execucao 1:
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+
+Tempo com mmap:  18 us
+Tempo com disco: 96 us
+Tamanho do arquivo: 142 bytes
+Tamanho da pagina:  4096 bytes
+Paginas utilizadas: 1
+
+Execucao 2:
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+
+Tempo com mmap:  19 us
+Tempo com disco: 96 us
+Tamanho do arquivo: 142 bytes
+Tamanho da pagina:  4096 bytes
+Paginas utilizadas: 1
+
+Execucao 3:
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+Laboratorio 9 - Manipulando a Memoria
+Este arquivo foi lido usando mmap().
+Cada caractere e acessado como um elemento de um vetor na memoria.
+
+Tempo com mmap:  39 us
+Tempo com disco: 99 us
+Tamanho do arquivo: 142 bytes
+Tamanho da pagina:  4096 bytes
+Paginas utilizadas: 1
+-----------------------------------------------------
+CONCLUSAO
+a) O tamanho da pagina foi obtido com sysconf(_SC_PAGESIZE), que no sistema usado e de 4096 bytes. Como o mapeamento e sempre feito em paginas inteiras, a quantidade de paginas e o tamanho do arquivo dividido pelo tamanho da pagina arredondado para cima, o que foi feito com a conta (st_size + pagesize - 1) / pagesize. O arquivo de teste tem 142 bytes e precisou de 1 pagina. Isso mostra o desperdicio comentado no laboratorio: dos 4096 bytes da pagina, so 142 sao do arquivo e o resto (3954 bytes) e preenchido com zeros.
+
+b) Para comparar os dois metodos, o programa percorre o arquivo inteiro duas vezes e mede o tempo de cada uma com gettimeofday(), calculando a diferenca em microssegundos. Na primeira vez cada caractere e acessado direto na memoria mapeada (p[len]); na segunda, o cursor do arquivo volta para o inicio com lseek() e cada caractere e obtido com read(fd, &c, 1). Nas tres execucoes o acesso pelo mapeamento foi bem mais rapido (entre 18 e 39 us) do que pela E/S tradicional (cerca de 96 a 99 us), algo entre 2,5 e 5 vezes mais rapido. A diferenca vem do fato de que cada read() e uma chamada de sistema, ou seja, para 142 bytes sao 142 trocas entre modo usuario e modo kernel e uma copia do buffer do kernel para a variavel c a cada byte. Com o mmap, depois que a pagina e carregada na primeira vez, todos os acessos sao leituras comuns de memoria, sem chamada de sistema nenhuma. Os tempos variam um pouco entre as execucoes porque dependem do escalonamento e do cache, e em arquivos tao pequenos qualquer interrupcao ja pesa bastante na medicao.
+-----------------------------------------------------
+
+
+
+QUESTAO 4) Escreva dois programas prog1.c e prog2.c que trocam dados atraves de um mesmo arquivo mapeado para memoria (de cada um).
+-----------------------------------------------------
+PROG1.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+
+#define TAM 100
+
+int main(int argc, char *argv[])
+{
+
+    if (argc < 2) {
+        fprintf (stderr, "usage: %s <file>\n", argv[0]);
+        exit(1);
+    }
+
+    int fd = open(argv[1], O_RDWR | O_CREAT, 0666);
+    if (fd == -1) {
+        perror ("open");
+        exit(1);
+    }
+    if (ftruncate(fd, TAM) == -1) {
+        perror ("ftruncate");
+        exit(1);
+    }
+    char *p = (char*) mmap(NULL, TAM, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror ("mmap");
+        exit(1);
+    }
+    close(fd);
+
+    strcpy(p, "Mensagem enviada pelo prog1!\n");
+    printf("[prog1] Escrevi no arquivo mapeado: \"%s\"", p);
+    printf("[prog1] Aguardando prog2 responder...\n");
+
+    while (strcmp(p, "Mensagem enviada pelo prog1!\n") == 0) {
+        sleep(1);
+    }
+    printf("[prog1] Recebi resposta do prog2: \"%s\"\n", p);
+
+    munmap(p, TAM);
+    return 0;
+}
+-----------------------------------------------------
+PROG2.C
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#define TAM 100
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Uso: %s <arquivo>\n", argv[0]);
+        exit(1);
+    }
+    int fd = open(argv[1], O_RDWR);
+    if (fd == -1) {
+        perror("open");
+        exit(1);
+    }
+    char *p = mmap(0, TAM, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror("mmap");
+        exit(1);
+    }
+
+    printf("[prog2] Li da memoria mapeada: \"%s\"\n", p);
+
+    strcpy(p, "Mensagem de prog1 lida com sucesso. Agora essa é a mensagem de prog2\n");
+
+    printf("[prog2] Enviei resposta para o prog1.\n");
+
+    close(fd);
+
+    munmap(p, TAM);
+    return 0;
+}
+-----------------------------------------------------
+COMUNICACAO.TXT
+(arquivo criado pelo prog1 com 100 bytes. Conteudo ao final da execucao, seguido de bytes nulos ate completar os 100 bytes:)
+Mensagem de prog1 lida com sucesso. Agora essa é a mensagem de prog2
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o prog1 prog1.c
+$ gcc -o prog2 prog2.c
+
+Terminal 1:
+$ ./prog1 comunicacao.txt
+
+Terminal 2 (com o prog1 ainda rodando):
+$ ./prog2 comunicacao.txt
+-----------------------------------------------------
+RESULTADO
+Terminal 1 (prog1):
+[prog1] Escrevi no arquivo mapeado: "Mensagem enviada pelo prog1!
+"[prog1] Aguardando prog2 responder...
+[prog1] Recebi resposta do prog2: "Mensagem de prog1 lida com sucesso. Agora essa é a mensagem de prog2
+"
+
+Terminal 2 (prog2):
+[prog2] Li da memoria mapeada: "Mensagem enviada pelo prog1!
+"
+[prog2] Enviei resposta para o prog1.
+-----------------------------------------------------
+CONCLUSAO
+Os dois programas se comunicam mapeando o mesmo arquivo na memoria com a flag MAP_SHARED. Com essa flag, as paginas mapeadas sao compartilhadas entre todos os processos que mapeiam o arquivo, entao o que um processo escreve na sua regiao aparece imediatamente na regiao do outro, sem nenhum read() ou write(). Se fosse usado MAP_PRIVATE, cada processo teria a sua propria copia e a troca de mensagens nao funcionaria.
+
+O prog1 abre (ou cria) o arquivo e usa ftruncate() para garantir que ele tenha exatamente 100 bytes (TAM). Isso e necessario porque um arquivo recem-criado tem tamanho 0 e nao e possivel mapear nem acessar uma regiao alem do fim do arquivo. Depois de mapear, ele escreve a sua mensagem com strcpy() direto na memoria e fica esperando, verificando a cada 1 segundo se o conteudo ainda e a mensagem que ele escreveu. O prog2 mapeia o mesmo arquivo, le a mensagem do prog1 e escreve a resposta por cima. Na proxima verificacao o prog1 percebe que o conteudo mudou e imprime a resposta. Por isso o prog2 tem que ser executado depois do prog1, ja que e o prog1 que cria o arquivo com o tamanho certo. Como o mapeamento e de um arquivo real, a ultima mensagem continua salva no comunicacao.txt depois que os dois programas terminam. Vale notar que a sincronizacao aqui e feita por espera ativa (o laco com sleep), sem nenhum mecanismo de exclusao mutua, entao ela funciona para essa troca simples, mas nao garantiria a consistencia se os dois escrevessem ao mesmo tempo.
+-----------------------------------------------------
+
+
+
+QUESTAO 5) Escreva um programa que faz um mapeamento de arquivo para memoria e depois escreve novos caracteres no final do arquivo. O que voce precisa fazer para evitar um SegFault?
+-----------------------------------------------------
+EX5.C
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Bom exercício para entender o funcionamento do mapeamento de arquivo na memória e uso do memcpy com mmap!!!
+
+int main (int argc, char *argv[])
+{
+    struct stat sb;
+    char *p;
+    int fd;
+    off_t tam_antigo, tam_novo;
+    char *texto = "Texto adicionado no final pelo ex5!\n";
+
+    if (argc < 2) {
+        fprintf (stderr, "usage: %s <file> [texto]\n", argv[0]);
+        exit(1);
+    }
+
+    if(argc >= 3)
+    {
+        texto = argv[2];
+    }
+
+    fd = open (argv[1], O_RDWR | O_CREAT, 0666);
+    if (fd == -1) {
+        perror ("open");
+        exit(1);
+    }
+    if (fstat(fd, &sb) == -1) {
+        perror ("fstat");
+        exit(1);
+    }
+    if (!S_ISREG (sb.st_mode)) {
+        fprintf (stderr, "%s is not a file\n", argv[1]);
+        exit(1);
+    }
+
+    tam_antigo = sb.st_size;
+    tam_novo = tam_antigo + strlen(texto);
+
+    if (ftruncate(fd, tam_novo) == -1) {
+        perror ("ftruncate");
+        exit(1);
+    }
+
+    p = mmap (0, tam_novo, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror ("mmap"); exit(1);
+    }
+    if (close (fd) == -1) {
+        perror ("close"); exit(1);
+    }
+
+    memcpy(p + tam_antigo, texto, strlen(texto));
+
+    printf("Tamanho antigo: %ld bytes\n", (long)tam_antigo);
+    printf("Tamanho novo:   %ld bytes\n", (long)tam_novo);
+
+    if (munmap (p, tam_novo) == -1) {
+        perror ("munmap");
+        exit(1);
+    }
+    return 0;
+}
+-----------------------------------------------------
+EX5.TXT
+Antes da execucao:
+Primeira linha do arquivo
+
+Depois da execucao:
+Primeira linha do arquivo
+Linha adicionada pelo ex5
+Texto adicionado no final pelo ex5!
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o ex5 ex5.c
+$ ./ex5 ex5.txt $'Linha adicionada pelo ex5\n'
+$ ./ex5 ex5.txt
+$ cat ex5.txt
+-----------------------------------------------------
+RESULTADO
+Tamanho antigo: 26 bytes
+Tamanho novo:   52 bytes
+Tamanho antigo: 52 bytes
+Tamanho novo:   88 bytes
+Primeira linha do arquivo
+Linha adicionada pelo ex5
+Texto adicionado no final pelo ex5!
+-----------------------------------------------------
+CONCLUSAO
+Para evitar o erro e preciso aumentar o tamanho do arquivo no disco antes de escrever alem do seu fim, usando ftruncate(), e fazer o mmap() ja com o tamanho novo. O mapeamento so da acesso aos bytes que o arquivo realmente tem, ele nao faz o arquivo crescer sozinho. Se o programa mapeasse uma regiao maior que o arquivo e escrevesse depois do fim, existem dois casos: se a escrita cair no resto da ultima pagina (a parte preenchida com zeros) ela nao gera erro, mas tambem nao e salva no arquivo; e se cair em uma pagina que esta inteira depois do fim do arquivo, o processo e encerrado pelo kernel com um sinal de erro de memoria (SIGBUS no Linux, ou SIGSEGV se o acesso estiver fora da regiao mapeada).
+
+O programa abre o arquivo para leitura e escrita, usa fstat() para descobrir o tamanho atual (tam_antigo) e calcula o tamanho novo somando o tamanho do texto. Em seguida chama ftruncate(fd, tam_novo), que aumenta o arquivo preenchendo os bytes novos com zeros, e so entao mapeia o arquivo inteiro com PROT_READ | PROT_WRITE e MAP_SHARED, para que as escritas sejam refletidas no arquivo. Como o ponteiro p retornado pelo mmap aponta para o inicio do arquivo (offset 0), o texto e copiado com memcpy para p + tam_antigo, ou seja, logo depois do ultimo byte do conteudo original, substituindo os zeros criados pelo ftruncate. O texto pode ser passado como segundo argumento; se nao for passado, o programa usa um texto padrao. Na execucao, o arquivo comecou com 26 bytes, passou para 52 depois da primeira chamada e para 88 depois da segunda, sem perder o conteudo anterior.
+-----------------------------------------------------
+
+
+
+QUESTAO 6) Re-escreva o seu programa do item anterior usando mremap()
+-----------------------------------------------------
+EX6.C
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main (int argc, char *argv[])
+{
+    struct stat sb;
+    char *p;
+    int fd;
+    off_t tam_antigo, tam_novo;
+    char *texto = "Texto adicionado no final pelo ex5!\n";
+
+    if (argc < 2) {
+        fprintf (stderr, "usage: %s <file> [texto]\n", argv[0]);
+        exit(1);
+    }
+
+    if(argc >= 3)
+    {
+        texto = argv[2];
+    }
+
+    fd = open (argv[1], O_RDWR | O_CREAT, 0666);
+    if (fd == -1) {
+        perror ("open");
+        exit(1);
+    }
+    if (fstat(fd, &sb) == -1) {
+        perror ("fstat");
+        exit(1);
+    }
+    if (!S_ISREG (sb.st_mode)) {
+        fprintf (stderr, "%s is not a file\n", argv[1]);
+        exit(1);
+    }
+
+    tam_antigo = sb.st_size;
+    if(tam_antigo == 0)
+    {
+        fprintf(stderr, "Arquivo vazio, use um arquivo existente como base.\n");
+        exit(1);
+    }
+    p = mmap (0, tam_antigo, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        perror ("mmap"); exit(1);
+    }
+
+    tam_novo = tam_antigo + strlen(texto);
+
+    if (ftruncate(fd, tam_novo) == -1) {
+        perror ("ftruncate");
+        exit(1);
+    }
+
+    p = mremap(p, tam_antigo, tam_novo, MREMAP_MAYMOVE);
+    if (p == MAP_FAILED)
+    {
+        perror("mremap");
+        exit(1);
+    }
+    if (close (fd) == -1) {
+        perror ("close"); exit(1);
+    }
+
+    memcpy(p + tam_antigo, texto, strlen(texto));
+
+    printf("Tamanho antigo: %ld bytes\n", (long)tam_antigo);
+    printf("Tamanho novo:   %ld bytes\n", (long)tam_novo);
+
+    if (munmap (p, tam_novo) == -1) {
+        perror ("munmap");
+        exit(1);
+    }
+    return 0;
+}
+-----------------------------------------------------
+EX6.TXT
+Antes da execucao:
+Primeira linha do arquivo
+
+Depois da execucao:
+Primeira linha do arquivo
+Linha adicionada pelo ex6 usando mremap
+Texto adicionado no final pelo ex5!
+
+VAZIO.TXT
+(arquivo vazio, 0 bytes)
+-----------------------------------------------------
+COMPILACAO E EXECUCAO
+$ gcc -o ex6 ex6.c
+$ ./ex6 ex6.txt $'Linha adicionada pelo ex6 usando mremap\n'
+$ ./ex6 ex6.txt
+$ cat ex6.txt
+$ ./ex6 vazio.txt
+-----------------------------------------------------
+RESULTADO
+Tamanho antigo: 26 bytes
+Tamanho novo:   66 bytes
+Tamanho antigo: 66 bytes
+Tamanho novo:   102 bytes
+Primeira linha do arquivo
+Linha adicionada pelo ex6 usando mremap
+Texto adicionado no final pelo ex5!
+Arquivo vazio, use um arquivo existente como base.
+-----------------------------------------------------
+CONCLUSAO
+A diferenca para a questao anterior e que agora o arquivo e mapeado primeiro com o seu tamanho original, e so depois o mapeamento e aumentado com mremap(). No ex5 o tamanho final ja era conhecido antes do mmap, entao bastava mapear direto com ele. O mremap() e util justamente quando o mapeamento ja existe e precisa crescer depois, sem ter que fazer munmap() e mmap() de novo. Ele recebe o endereco atual do mapeamento, o tamanho antigo, o tamanho novo e as flags. Foi usada a flag MREMAP_MAYMOVE, que permite ao kernel mover o mapeamento para outro endereco caso nao haja espaco livre logo depois da regiao atual. Por isso o retorno do mremap e atribuido de novo a p, ja que o endereco antigo pode deixar de ser valido. Como mremap() e uma funcao especifica do Linux, foi necessario colocar #define _GNU_SOURCE antes dos includes, senao a funcao e a constante MREMAP_MAYMOVE nao sao declaradas e o programa nao compila.
+
+O mremap() so altera o tamanho da regiao na memoria, ele nao aumenta o arquivo. Por isso continua sendo necessario chamar ftruncate() antes, pelo mesmo motivo da questao 5: sem isso, a parte nova do mapeamento nao teria bytes do arquivo por tras e a escrita causaria erro. Depois disso o texto e copiado para p + tam_antigo com memcpy, e o munmap() e feito com o tamanho novo. Tambem foi tratado o caso de arquivo vazio, porque o mmap() inicial com tamanho 0 falha com EINVAL; nesse caso o programa avisa e encerra, como mostra a ultima execucao com vazio.txt.
+-----------------------------------------------------
