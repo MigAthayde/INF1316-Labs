@@ -47,6 +47,7 @@ int db_write(int key, int new_value);
 int cache_find(int key);
 int cache_get(int key, int* out_value);
 int cache_put(int key, int new_value);
+void *db_thread(void *arg);
 
 int main(void)
 {
@@ -158,4 +159,16 @@ int cache_put(int key, int new_value) {
     cache[alvo].timestamp = ++tick;
     is_valid[alvo] = 1;
     return CACHE_MISS;
+}
+
+void *db_thread(void *arg)
+{
+    (void)arg;
+    Mailbox *mb = &db_box;
+
+    pthread_mutex_lock(&mb->mtx);
+    while(1)
+    {
+        // Lógica da thread dormir até ter pedido + resposta, orchestrando essa lógica
+    }
 }
