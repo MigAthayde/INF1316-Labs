@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 #define DELAY 50000
 #define CACHE_HIT 1
@@ -13,6 +14,7 @@
 #define DB_ERROR 0
 
 typedef enum { OP_GET, OP_PUT, OP_INVALIDATE, OP_DB_READ, OP_DB_WRITE } ReqType;
+long n_ops = 0, hits = 0, misses = 0, db_reads = 0, db_writes = 0;
 
 typedef struct {
     pthread_mutex_t mtx;
@@ -41,13 +43,24 @@ int is_valid[CACHE_SIZE] = {0};
 
 long tick = 0;
 
+// Flag marcada pelo handler do Ctrl-Z; quem limpa o cache de fato é a cache_thread
+volatile sig_atomic_t limpar_cache = 0;
+
+// Instante em que o programa começou (para medir o tempo no item 3)
+struct timespec t_inicio;
+
 int call(Mailbox *mb, ReqType type, int key, int *value);
 int db_read(int key, int* out_value);
 int db_write(int key, int new_value);
 int cache_find(int key);
 int cache_get(int key, int* out_value);
 int cache_put(int key, int new_value);
+void cache_invalidate(int key);
+void cache_clear(void);
+void on_tstp(int sig);
 void *db_thread(void *arg);
+void *cache_thread(void *arg);
+void *cliente_thread(void *arg);
 
 int main(void)
 {
@@ -56,6 +69,19 @@ int main(void)
         banco_de_dados[i] = i+1;
     }
 
+    struct sigaction sa = {0};
+    sa.sa_handler = on_tstp;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGTSTP, &sa, NULL);
+
+    clock_gettime(CLOCK_MONOTONIC, &t_inicio);
+
+    pthread_t tdb, tcache, tcli;
+    pthread_create(&tdb, NULL, db_thread, NULL);
+    pthread_create(&tcache, NULL, cache_thread, NULL);
+    pthread_create(&tcli, NULL, cliente_thread, NULL);
+
+    pthread_join(tcli, NULL); 
     return 0;
 }
 
@@ -107,14 +133,13 @@ int db_write(int key, int new_value) {
         printf("[DB-ERRO] Tentativa de escrita em chave inválida: %d\n", key);
         return DB_ERROR;
     }
-    // Atualiza o registro no banco de dados com o novo valor
     banco_de_dados[key] = new_value;
     usleep(DELAY);
     printf("[DB-WRITE] Gravando no Banco -> Chave: %d, Novo Valor: %d\n", key, new_value);
     return DB_SUCCESS;
 }
 
-// Procura o slot que guarda essa key. Devolve o índice, ou -1 se não estiver no cache.
+
 int cache_find(int key) {
     for (int i = 0; i < CACHE_SIZE; i++)
         if (is_valid[i] && cache[i].key == key)
@@ -125,25 +150,23 @@ int cache_find(int key) {
 int cache_get(int key, int* out_value) {
     int i = cache_find(key);
     if (i >= 0) {
-        // CACHE HIT: devolve o valor e marca o acesso
         *out_value = cache[i].value;
         cache[i].timestamp = ++tick;
         return CACHE_HIT;
     }
-    // CACHE MISS: a key não está em nenhum slot
     return CACHE_MISS;
 }
 
 int cache_put(int key, int new_value) {
     int i = cache_find(key);
     if (i >= 0) {
-        // Key já está no cache: só atualiza
+
         cache[i].value = new_value;
         cache[i].timestamp = ++tick;
         return CACHE_HIT;
     }
 
-    // Key nova: procura um slot vazio e, ao mesmo tempo, o mais antigo
+
     int alvo = -1;
     int mais_antigo = 0;
     for (int j = 0; j < CACHE_SIZE; j++) {
@@ -152,13 +175,31 @@ int cache_put(int key, int new_value) {
             mais_antigo = j;
     }
     if (alvo < 0)
-        alvo = mais_antigo;   // cache cheio: substitui a entrada mais antiga
+        alvo = mais_antigo;
 
     cache[alvo].key = key;
     cache[alvo].value = new_value;
     cache[alvo].timestamp = ++tick;
     is_valid[alvo] = 1;
     return CACHE_MISS;
+}
+
+
+void cache_invalidate(int key) {
+    int i = cache_find(key);
+    if (i >= 0)
+        is_valid[i] = 0;
+}
+
+void cache_clear(void) {
+    for (int i = 0; i < CACHE_SIZE; i++)
+        is_valid[i] = 0;
+}
+
+void on_tstp(int sig)
+{
+    (void)sig;
+    limpar_cache = 1;
 }
 
 void *db_thread(void *arg)
@@ -169,6 +210,128 @@ void *db_thread(void *arg)
     pthread_mutex_lock(&mb->mtx);
     while(1)
     {
-        // Lógica da thread dormir até ter pedido + resposta, orchestrando essa lógica
+        while(!mb->has_req)
+        {
+            pthread_cond_wait(&mb->cond_req, &mb->mtx);
+        }
+
+        if(mb->type == OP_DB_READ)
+        {
+            mb->result = db_read(mb->key, &mb->value);
+        }
+        else if(mb->type == OP_DB_WRITE)
+        {
+            mb->result = db_write(mb->key, mb->value);
+        }
+        else
+        {
+            mb->result = DB_ERROR;
+        }
+
+        mb->has_req = 0;
+        mb->has_resp = 1;
+        pthread_cond_signal(&mb->cond_resp);
     }
+
+    return NULL;
+}
+
+void *cache_thread(void *arg)
+{
+    (void)arg;
+    Mailbox *mb = &cache_box;
+
+    pthread_mutex_lock(&mb->mtx);
+    while(1)
+    {
+        while(!mb->has_req)
+        {
+            pthread_cond_wait(&mb->cond_req, &mb->mtx);
+        }
+
+        if(limpar_cache)
+        {
+            cache_clear();
+            limpar_cache = 0;
+            printf("\n[CACHE] Ctrl-Z recebido: cache limpo!\n");
+        }
+
+        if(mb->type == OP_GET)
+        {
+            mb->result = cache_get(mb->key, &mb->value);
+        }
+        else if(mb->type == OP_PUT)
+        {
+            mb->result = cache_put(mb->key, mb->value);
+        }
+        else if(mb->type == OP_INVALIDATE)
+        {
+            cache_invalidate(mb->key);
+            mb->result = 0;
+        }
+        else
+        {
+            mb->result = CACHE_MISS;
+        }
+
+        mb->has_req = 0;
+        mb->has_resp = 1;
+        pthread_cond_signal(&mb->cond_resp);
+    }
+
+    return NULL;
+}
+
+void *cliente_thread(void *arg)
+{
+    (void)arg;
+    FILE *f = fopen("log.txt", "r");
+    if (!f)
+    {
+        perror("log.txt");
+        exit(1);
+    }
+
+    char op;
+    int key, value;
+    while(1)
+    {
+        if(fscanf(f, " %c,", &op) != 1)
+        {
+            rewind(f);   // fim do log: recomeça do início (leitura cíclica)
+            continue;
+        }
+
+        if(op == 'R')
+        {
+            fscanf(f, "%d", &key);
+            if (call(&cache_box, OP_GET, key, &value) == CACHE_HIT)
+            {
+                hits++;
+            }
+            else{
+                misses++;
+                call(&db_box, OP_DB_READ, key, &value);
+                db_reads++;
+                call(&cache_box, OP_PUT, key, &value);
+            }
+        }
+        else
+        {
+            fscanf(f, "%d, %d", &value, &key);
+            call(&db_box, OP_DB_WRITE, key, &value);
+            db_writes++;
+            call(&cache_box, OP_INVALIDATE, key, NULL);
+        }
+
+        n_ops++;
+        if(n_ops % 500 == 0)
+        {
+            struct timespec agora;
+            clock_gettime(CLOCK_MONOTONIC, &agora);
+            double seg = (agora.tv_sec - t_inicio.tv_sec) + (agora.tv_nsec - t_inicio.tv_nsec) / 1e9;
+            printf(">>> [CA] ops=%ld hits=%ld misses=%ld db_reads=%ld db_writes=%ld tempo=%.2fs\n", n_ops, hits, misses, db_reads, db_writes, seg);
+        }
+    }
+    return NULL;
 }
